@@ -1,2 +1,175 @@
 # homelab
-Personal homelab running production-grade Kubernetes on bare metal — Talos Linux, ArgoCD GitOps, Thanos observability stack, and full infrastructure-as-code with OpenTofu.
+
+Production-grade Kubernetes homelab running on a bare-metal machine. Built to learn and practice the same tools used in real infrastructure teams — GitOps, immutable OS, long-term observability, and infrastructure-as-code from the ground up.
+
+> The full repository containing the complete cluster setup, configurations, and runbooks is private for security reasons (credentials, internal network topology, node details). This repo serves as an overview of the architecture and design decisions.
+
+---
+
+## Stack
+
+| Layer | Tool | Why |
+|---|---|---|
+| Hypervisor | [Proxmox VE](https://www.proxmox.com/) | Mature bare-metal virtualisation, good community |
+| OS / Kubernetes | [Talos Linux](https://www.talos.dev/) | Immutable, API-driven, no SSH, minimal attack surface |
+| Infra provisioning | [OpenTofu](https://opentofu.org/) | IaC for VMs — reproducible cluster from scratch |
+| GitOps | [ArgoCD](https://argo-cd.readthedocs.io/) | Declarative, Git-driven deployments with drift detection |
+| Ingress | [Envoy Gateway](https://gateway.envoyproxy.io/) | Kubernetes Gateway API — the successor to Ingress |
+| Load balancer | [MetalLB](https://metallb.universe.tf/) | Assigns real LAN IPs to LoadBalancer services (L2 mode) |
+| LAN DNS | [CoreDNS](https://coredns.io/) | Runs in-cluster, resolves custom hostnames across the LAN |
+| Storage | [local-path-provisioner](https://github.com/rancher/local-path-provisioner) | Simple node-local PVs, no external dependencies |
+| Object storage | [MinIO](https://min.io/) | S3-compatible store for Thanos long-term metrics |
+| Metrics | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) + [Thanos](https://thanos.io/) | Short-term in Prometheus, long-term in MinIO via Thanos |
+| Logs | [Loki](https://grafana.com/oss/loki/) + [Alloy](https://grafana.com/oss/alloy/) | Log aggregation and collection |
+| Dashboards | [Grafana](https://grafana.com/) | Unified view for metrics and logs |
+
+---
+
+## Cluster
+
+3 VMs on a single bare-metal host (Proxmox):
+
+| Role | CPU | RAM | Disk |
+|---|---|---|---|
+| Control plane × 1 | 2 vCPU | 5 GB | 10 GB |
+| Worker × 2 | 2 vCPU | 3 GB | 30 GB |
+
+Workers are memory-constrained (3 GB each), so workloads are pinned via `nodeSelector` to keep memory balanced across both nodes:
+
+- **Data worker** — PVC-bound workloads that can't move once scheduled: Prometheus, MinIO, Loki
+- **Stateless worker** — everything that has no storage dependency: ArgoCD, Grafana, Envoy Gateway, CoreDNS, kube-state-metrics
+
+DaemonSets (Alloy, MetalLB speaker, node-exporter) run on all nodes.
+
+---
+
+## Architecture
+
+```
+                    ┌─────────────────────────────────────────────┐
+                    │                Bare-metal host               │
+                    │                   Proxmox VE                 │
+                    │                                             │
+                    │   ┌─────────────┐   ┌─────────────────┐   │
+                    │   │Control plane│   │    Workers ×2   │   │
+                    │   │ Talos Linux │   │  Talos Linux    │   │
+                    │   └──────┬──────┘   └────────┬────────┘   │
+                    └──────────┼──────────────────-┼─────────────┘
+                               │    Kubernetes      │
+                    ┌──────────▼────────────────────▼──────────┐
+                    │                                          │
+                    │   ┌──────────┐     ┌─────────────────┐  │
+                    │   │  ArgoCD  │────▶│ ApplicationSets │  │
+                    │   └──────────┘     └────────┬────────┘  │
+                    │                             │ syncs      │
+                    │              ┌──────────────▼──────────┐ │
+                    │              │        Addons           │ │
+                    │   Ingress    │  MetalLB · CoreDNS      │ │
+                    │   ┌──────┐   │  Envoy Gateway          │ │
+  Browser ─────────┼──▶│      │   │                         │ │
+                    │   │Envoy │   │  Observability          │ │
+                    │   │  GW  │   │  Alloy · Prometheus     │ │
+                    │   └──┬───┘   │  Thanos · MinIO         │ │
+                    │      │       │  Loki · Grafana         │ │
+                    │      ▼       └─────────────────────────┘ │
+                    │   Services                               │
+                    └──────────────────────────────────────────┘
+```
+
+---
+
+## GitOps design
+
+No manual `kubectl apply` for workloads. Everything is a Helm chart wrapper committed to Git. ArgoCD watches the repo and reconciles the cluster to match.
+
+**ApplicationSets** auto-discover addons by scanning for directories containing a `config.json`:
+
+```
+gitops/addons/grafana/config.json   →   ArgoCD creates Application "grafana"
+gitops/addons/loki/config.json      →   ArgoCD creates Application "loki"
+```
+
+Adding a new addon is three files and a push. Removing it is renaming `config.json` to `config.json.disabled`.
+
+Each addon follows the same structure:
+
+```
+addons/my-addon/
+├── config.json    # app name + target namespace
+├── Chart.yaml     # Helm wrapper with upstream chart as dependency
+└── values.yaml    # all configuration
+```
+
+---
+
+## Observability
+
+Full metrics + logs pipeline built from open-source components:
+
+```
+Collection:    Alloy (DaemonSet) ──────────────┐
+                                               │
+               ┌── metrics ──▶ Prometheus ─────┤
+               │               (2d hot, 10Gi)  │
+               │                    │          │
+               │               Thanos Sidecar  │
+               │                    │ blocks   │
+               │                    ▼          │
+               │               MinIO (20Gi) ◀──┘
+               │                    │
+               │               Thanos Store
+               │                 Gateway
+               │                    │
+               └── logs ──▶ Loki    │
+                                    │
+                            Thanos Query
+                                    │
+                            Thanos QueryFrontend
+                                    │
+                               Grafana ◀── Loki
+```
+
+**Metrics retention:**
+- Prometheus keeps 2 days of hot data locally
+- Thanos sidecar uploads 2-hour TSDB blocks to MinIO every 2 hours
+- Thanos Compactor enforces a 7-day raw retention, 30-day 5m downsampled, 90-day 1h downsampled
+- Grafana points to Thanos QueryFrontend — queries transparently span both hot and historical data
+
+**Why Thanos instead of just Prometheus?**
+Prometheus is intentionally short-lived with local storage. Thanos decouples storage from the scraping layer — metrics survive node failures and aren't limited by local disk. MinIO provides the S3-compatible backend without external cloud dependencies.
+
+---
+
+## Networking
+
+Traffic flows through a single entry point:
+
+```
+Browser → LAN DNS (CoreDNS) → resolves *.homelab.internal
+        → MetalLB VIP → Envoy Gateway → HTTPRoute → Service → Pod
+```
+
+CoreDNS runs inside the cluster and handles DNS for all internal hostnames. MetalLB assigns real LAN IPs to the `LoadBalancer` services (Envoy Gateway, CoreDNS) using L2 advertisement — no BGP required.
+
+**Why Envoy Gateway over a standard Ingress controller?**
+Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k8s.io/), which is the intended successor to the Ingress resource. `HTTPRoute` gives per-route control, cross-namespace routing without ReferenceGrants (via `allowedRoutes: from: All`), and a cleaner separation between the infrastructure owner (Gateway) and the app developer (HTTPRoute).
+
+---
+
+## Interesting challenges
+
+**Talos has no shell.** Debugging node-level issues (disk pressure, PVC directories) requires running privileged pods in the cluster or using `talosctl` for read-only inspection. This forces proper GitOps discipline — you can't make one-off changes on the node.
+
+**local-path PVCs have no size enforcement.** A 20 Gi PVC is a label, not a hard cap. Thanos blocks were accumulating in MinIO at ~2.5 GB/day with no retention policy, filling a 30 GB disk in ~6 days. Fixed by adding Compactor retention and doubling the scrape interval (30s → 60s).
+
+**ArgoCD + Helm hooks don't always mix.** kube-prometheus-stack annotates its CRDs and admission webhook resources as `pre-install` Helm hooks. ArgoCD processes these as hooks and waits for them to reach a terminal state — but `ServiceAccount` and `ClusterRole` resources have no terminal state, so ArgoCD hangs indefinitely. Fixed by disabling the admission webhook setup entirely (not needed for a homelab) and excluding `batch/Job` resources from ArgoCD tracking.
+
+**Workload placement on memory-constrained nodes.** With 3 GB RAM per worker, a single out-of-place heavy pod tips the balance. Everything stateless is pinned to one worker via `nodeSelector`, and everything PVC-bound lands on the other by necessity. ArgoCD's application-controller (349 Mi actual) was the swing factor — moving it to the data worker brought both nodes to ~55% utilisation.
+
+---
+
+## What's next
+
+- Alerting via Grafana Alerting (PVC and node disk thresholds)
+- SOPS for secrets management (credentials are currently plaintext in values)
+- More RAM on the host to allow worker memory expansion
