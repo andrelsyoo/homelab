@@ -146,16 +146,18 @@ Collection:    Alloy (DaemonSet) ──────────────┐
 - Grafana points to Thanos QueryFrontend — queries transparently span both hot and historical data
 
 **Alerting:**
-Grafana Unified Alerting handles routing directly — no Alertmanager. For a single-cluster homelab, Grafana's built-in alerting covers everything needed: it already has the datasource, dashboards, and notification channels in one place, so there's no real reason to run Alertmanager as a separate component. That said, if the setup grows in complexity (multiple clusters, more advanced routing or silencing needs), switching to Alertmanager is a straightforward path. Alert rules are provisioned as Kubernetes ConfigMaps (committed to Git) and loaded automatically by a Grafana sidecar. 11 rules across 4 groups:
+Grafana Unified Alerting handles routing directly — no Alertmanager. For a single-cluster homelab, Grafana's built-in alerting covers everything needed: it already has the datasource, dashboards, and notification channels in one place, so there's no real reason to run Alertmanager as a separate component. That said, if the setup grows in complexity (multiple clusters, more advanced routing or silencing needs), switching to Alertmanager is a straightforward path.
+
+Alert rules are defined inline in `grafana/values.yaml` and loaded at pod startup as mounted volumes — no sidecar or reload API involved. 11 rules across 4 groups:
 
 | Group | Rules |
 |---|---|
 | Nodes | Node down, Disk > 80%, Memory > 85%, PVC > 80% |
-| Workloads | Pod crash looping, OOMKill, Pod not ready > 5m |
+| Workloads | Pod crash looping, OOMKill (fires only on recent restarts), Pod not ready > 5m |
 | ArgoCD | App unhealthy, App out of sync > 15m |
 | Observability | Prometheus target down, Thanos not uploading > 3h |
 
-Notifications go to a Google Group (email) and a Telegram bot. Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
+Rules that detect absence of a metric (node down, target down, Thanos stale) use `noDataState: Alerting`. Threshold rules (disk, memory, crash loop, etc.) use `noDataState: OK` — no data means the condition isn't met. Notifications go to a Google Group (email) and a Telegram bot. Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
 
 **Why Thanos instead of just Prometheus?**
 Prometheus is intentionally short-lived with local storage. Thanos decouples storage from the scraping layer — metrics survive node failures and aren't limited by local disk. MinIO provides the S3-compatible backend without external cloud dependencies.
