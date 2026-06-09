@@ -146,7 +146,7 @@ Collection:    Alloy (DaemonSet) ──────────────┐
 - Grafana points to Thanos QueryFrontend — queries transparently span both hot and historical data
 
 **Alerting:**
-Grafana Unified Alerting handles routing directly — no Alertmanager. Alert rules are provisioned as Kubernetes ConfigMaps (committed to Git) and loaded automatically by a Grafana sidecar. 11 rules across 4 groups:
+Grafana Unified Alerting handles routing directly — no Alertmanager. For a single-cluster homelab, Grafana's built-in alerting covers everything needed: it already has the datasource, dashboards, and notification channels in one place, so there's no real reason to run Alertmanager as a separate component. That said, if the setup grows in complexity (multiple clusters, more advanced routing or silencing needs), switching to Alertmanager is a straightforward path. Alert rules are provisioned as Kubernetes ConfigMaps (committed to Git) and loaded automatically by a Grafana sidecar. 11 rules across 4 groups:
 
 | Group | Rules |
 |---|---|
