@@ -22,6 +22,7 @@ Production-grade Kubernetes homelab running on a bare-metal machine. Built to ho
 | Metrics | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) + [Thanos](https://thanos.io/) | Short-term in Prometheus, long-term in MinIO via Thanos |
 | Logs | [Loki](https://grafana.com/oss/loki/) + [Alloy](https://grafana.com/oss/alloy/) | Log aggregation and collection |
 | Dashboards | [Grafana](https://grafana.com/) | Unified view for metrics and logs |
+| Alerting | Grafana Unified Alerting | Alert rules as code, routed to email + Telegram |
 
 ---
 
@@ -71,6 +72,8 @@ DaemonSets (Alloy, MetalLB speaker, node-exporter) run on all nodes.
                     │   │  GW  │   │  Alloy · Prometheus     │ │
                     │   └──┬───┘   │  Thanos · MinIO         │ │
                     │      │       │  Loki · Grafana         │ │
+                    │      │       │    │ Alerting            │ │
+                    │      │       │    └▶ Email · Telegram   │ │
                     │      ▼       └─────────────────────────┘ │
                     │   Services                               │
                     └──────────────────────────────────────────┘
@@ -127,6 +130,13 @@ Collection:    Alloy (DaemonSet) ──────────────┐
                             Thanos QueryFrontend
                                     │
                                Grafana ◀── Loki
+                                    │
+                            Unified Alerting
+                            (rules as code)
+                                    │
+                         ┌──────────┴──────────┐
+                      Email                Telegram
+                  (Google Group)            (bot)
 ```
 
 **Metrics retention:**
@@ -134,6 +144,18 @@ Collection:    Alloy (DaemonSet) ──────────────┐
 - Thanos sidecar uploads 2-hour TSDB blocks to MinIO every 2 hours
 - Thanos Compactor enforces a 7-day raw retention, 30-day 5m downsampled, 90-day 1h downsampled
 - Grafana points to Thanos QueryFrontend — queries transparently span both hot and historical data
+
+**Alerting:**
+Grafana Unified Alerting handles routing directly — no Alertmanager. Alert rules are provisioned as Kubernetes ConfigMaps (committed to Git) and loaded automatically by a Grafana sidecar. 11 rules across 4 groups:
+
+| Group | Rules |
+|---|---|
+| Nodes | Node down, Disk > 80%, Memory > 85%, PVC > 80% |
+| Workloads | Pod crash looping, OOMKill, Pod not ready > 5m |
+| ArgoCD | App unhealthy, App out of sync > 15m |
+| Observability | Prometheus target down, Thanos not uploading > 3h |
+
+Notifications go to a Google Group (email) and a Telegram bot. Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
 
 **Why Thanos instead of just Prometheus?**
 Prometheus is intentionally short-lived with local storage. Thanos decouples storage from the scraping layer — metrics survive node failures and aren't limited by local disk. MinIO provides the S3-compatible backend without external cloud dependencies.
@@ -170,6 +192,5 @@ Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k
 
 ## What's next
 
-- Alerting via Grafana Alerting (PVC and node disk thresholds)
 - SOPS for secrets management (credentials are currently plaintext in values)
 - More RAM on the host to allow worker memory expansion
