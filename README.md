@@ -23,6 +23,7 @@ Production-grade Kubernetes homelab running on a bare-metal machine. Built to ho
 | Logs | [Loki](https://grafana.com/oss/loki/) + [Alloy](https://grafana.com/oss/alloy/) | Log aggregation and collection |
 | Dashboards | [Grafana](https://grafana.com/) | Unified view for metrics and logs |
 | Alerting | Grafana Unified Alerting | Alert rules as code, routed to email + Telegram |
+| Remote access | [Tailscale](https://tailscale.com/) | WireGuard-based VPN, subnet router on a dedicated Debian VM |
 
 ---
 
@@ -191,6 +192,14 @@ Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k
 **Workload placement on memory-constrained nodes.** With 3 GB RAM per worker, a single out-of-place heavy pod tips the balance. Everything stateless is pinned to one worker via `nodeSelector`, and everything PVC-bound lands on the other by necessity. ArgoCD's application-controller (349 Mi actual) was the swing factor — moving it to the data worker brought both nodes to ~55% utilisation.
 
 ---
+
+## Remote access
+
+Tailscale runs on a dedicated Debian 12 VM on Proxmox, acting as a subnet router that advertises the `192.168.1.0/24` LAN to the Tailscale mesh. When connected from any device, the full homelab network is reachable — including internal services and `*.london.internal` hostnames.
+
+The VM is provisioned via a generic, distro-agnostic OpenTofu module (`infrastructure/proxmox/modules/vm/`) and lives in its own independent Terraform root (`infrastructure/proxmox/vms/tailscale/`), completely decoupled from the Kubernetes cluster. This means it survives a full cluster rebuild and can be managed independently.
+
+Tailscale was chosen over self-hosted VPN solutions for its simplicity — no server to maintain, WireGuard under the hood, free tier covers homelab scale.
 
 ## What's next
 
