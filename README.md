@@ -13,6 +13,7 @@ Production-grade Kubernetes homelab running on a bare-metal machine. Built to ho
 | Hypervisor | [Proxmox VE](https://www.proxmox.com/) | Mature bare-metal virtualisation, good community |
 | OS / Kubernetes | [Talos Linux](https://www.talos.dev/) | Immutable, API-driven, no SSH, minimal attack surface |
 | Infra provisioning | [OpenTofu](https://opentofu.org/) | IaC for VMs — reproducible cluster from scratch |
+| Config management | [Ansible](https://www.ansible.com/) | VM post-provisioning — Tailscale install and subnet router configuration |
 | GitOps | [ArgoCD](https://argo-cd.readthedocs.io/) | Declarative, Git-driven deployments with drift detection |
 | Ingress | [Envoy Gateway](https://gateway.envoyproxy.io/) | Kubernetes Gateway API — the successor to Ingress |
 | Load balancer | [MetalLB](https://metallb.universe.tf/) | Assigns real LAN IPs to LoadBalancer services (L2 mode) |
@@ -198,6 +199,8 @@ Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k
 Tailscale runs on a dedicated Debian 12 VM on Proxmox, acting as a subnet router that advertises the `192.168.1.0/24` LAN to the Tailscale mesh. When connected from any device, the full homelab network is reachable — including internal services and `*.london.internal` hostnames.
 
 The VM is provisioned via a generic, distro-agnostic OpenTofu module (`infrastructure/proxmox/modules/vm/`) and lives in its own independent Terraform root (`infrastructure/proxmox/vms/tailscale/`), completely decoupled from the Kubernetes cluster. This means it survives a full cluster rebuild and can be managed independently.
+
+After Terraform creates the VM, an Ansible playbook (`infrastructure/ansible/playbooks/tailscale.yml`) handles post-provisioning: enabling IPv4 forwarding, adding the Tailscale apt repo, installing the daemon, and running `tailscale up` with the auth key and subnet advertisement.
 
 Tailscale was chosen over self-hosted VPN solutions for its simplicity — no server to maintain, WireGuard under the hood, free tier covers homelab scale.
 
