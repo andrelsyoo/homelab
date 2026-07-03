@@ -23,7 +23,7 @@ Production-grade Kubernetes homelab running on a bare-metal machine. Built to ho
 | Metrics | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) + [Thanos](https://thanos.io/) | Short-term in Prometheus, long-term in MinIO via Thanos |
 | Logs | [Loki](https://grafana.com/oss/loki/) + [Alloy](https://grafana.com/oss/alloy/) | Log aggregation and collection |
 | Dashboards | [Grafana](https://grafana.com/) | Unified view for metrics and logs |
-| Alerting | Grafana Unified Alerting | Alert rules as code, routed to email + Telegram |
+| Alerting | Grafana Unified Alerting | Alert rules as code, routed to Telegram |
 | Remote access | [Tailscale](https://tailscale.com/) | WireGuard-based VPN, subnet router on a dedicated Debian VM |
 
 ---
@@ -35,7 +35,7 @@ Production-grade Kubernetes homelab running on a bare-metal machine. Built to ho
 | Role | CPU | RAM | Disk |
 |---|---|---|---|
 | Control plane × 1 | 2 vCPU | 5 GB | 10 GB |
-| Worker × 2 | 2 vCPU | 3 GB | 30 GB |
+| Worker × 2 | 2 vCPU | 3 GB | 60 GB |
 
 Workers are memory-constrained (3 GB each), so workloads are pinned via `nodeSelector` to keep memory balanced across both nodes:
 
@@ -75,7 +75,7 @@ DaemonSets (Alloy, MetalLB speaker, node-exporter) run on all nodes.
                     │   └──┬───┘   │  Thanos · MinIO         │ │
                     │      │       │  Loki · Grafana         │ │
                     │      │       │    │ Alerting            │ │
-                    │      │       │    └▶ Email · Telegram   │ │
+                    │      │       │    └▶ Telegram            │ │
                     │      ▼       └─────────────────────────┘ │
                     │   Services                               │
                     └──────────────────────────────────────────┘
@@ -136,9 +136,9 @@ Collection:    Alloy (DaemonSet) ──────────────┐
                             Unified Alerting
                             (rules as code)
                                     │
-                         ┌──────────┴──────────┐
-                      Email                Telegram
-                  (Google Group)            (bot)
+                                    │
+                                Telegram
+                                 (bot)
 ```
 
 **Metrics retention:**
@@ -159,7 +159,7 @@ Alert rules are defined inline in `grafana/values.yaml` and loaded at pod startu
 | ArgoCD | App unhealthy, App out of sync > 15m |
 | Observability | Prometheus target down, Thanos not uploading > 3h |
 
-Rules that detect absence of a metric (node down, target down, Thanos stale) use `noDataState: Alerting`. Threshold rules (disk, memory, crash loop, etc.) use `noDataState: OK` — no data means the condition isn't met. Notifications go to a Google Group (email) and a Telegram bot. Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
+Rules that detect absence of a metric (node down, target down, Thanos stale) use `noDataState: Alerting`. Threshold rules (disk, memory, crash loop, etc.) use `noDataState: OK` — no data means the condition isn't met. Notifications go to a Telegram bot (email was dropped — redundant once Telegram was reliable). Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
 
 **Why Thanos instead of just Prometheus?**
 Prometheus is intentionally short-lived with local storage. Thanos decouples storage from the scraping layer — metrics survive node failures and aren't limited by local disk. MinIO provides the S3-compatible backend without external cloud dependencies.
@@ -186,7 +186,7 @@ Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k
 
 **Talos has no shell.** Debugging node-level issues (disk pressure, PVC directories) requires running privileged pods in the cluster or using `talosctl` for read-only inspection. This forces proper GitOps discipline — you can't make one-off changes on the node.
 
-**local-path PVCs have no size enforcement.** A 20 Gi PVC is a label, not a hard cap. Thanos blocks were accumulating in MinIO at ~2.5 GB/day with no retention policy, filling a 30 GB disk in ~6 days. Fixed by adding Compactor retention and doubling the scrape interval (30s → 60s).
+**local-path PVCs have no size enforcement — and worse, they can deadlock a node.** A 20 Gi PVC is a label, not a hard cap. Thanos blocks were accumulating in MinIO at ~2.5 GB/day with no retention policy, filling a 30 GB disk in ~6 days. Adding Compactor retention and doubling the scrape interval (30s → 60s) slowed the growth, but didn't fix the underlying risk: a `local-path` PV pins its pod to the node it was first scheduled on. When the disk filled again later, MinIO was evicted for disk pressure and couldn't reschedule anywhere else — and with MinIO down, the Compactor couldn't reach the bucket to enforce retention or free space, so the node could never recover on its own. The actual fix was doubling the worker disks (30 GB → 60 GB) for real headroom; retention policy alone only buys time against the growth rate, it doesn't prevent the deadlock.
 
 **ArgoCD + Helm hooks don't always mix.** kube-prometheus-stack annotates its CRDs and admission webhook resources as `pre-install` Helm hooks. ArgoCD processes these as hooks and waits for them to reach a terminal state — but `ServiceAccount` and `ClusterRole` resources have no terminal state, so ArgoCD hangs indefinitely. Fixed by disabling the admission webhook setup entirely (not needed for a homelab) and excluding `batch/Job` resources from ArgoCD tracking.
 
