@@ -159,7 +159,7 @@ Alert rules are defined inline in `grafana/values.yaml` and loaded at pod startu
 | ArgoCD | App unhealthy, App out of sync > 15m |
 | Observability | Prometheus target down, Thanos not uploading > 3h |
 
-Rules that detect absence of a metric (node down, target down, Thanos stale) use `noDataState: Alerting`. Threshold rules (disk, memory, crash loop, etc.) use `noDataState: OK` — no data means the condition isn't met. Notifications go to a Telegram bot (email was dropped — redundant once Telegram was reliable). Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
+Rules that detect absence of a metric (node down, target down, Thanos stale) use `noDataState: Alerting`. Threshold rules (disk, memory, crash loop, etc.) use `noDataState: OK` — no data means the condition isn't met. Notifications go to a Telegram bot — Telegram alone is enough for a lab this size, so the email receiver was dropped. Credentials are injected at runtime from a Kubernetes secret — nothing sensitive in Git.
 
 **Why Thanos instead of just Prometheus?**
 Prometheus is intentionally short-lived with local storage. Thanos decouples storage from the scraping layer — metrics survive node failures and aren't limited by local disk. MinIO provides the S3-compatible backend without external cloud dependencies.
