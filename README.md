@@ -2,6 +2,8 @@
 
 Production-grade Kubernetes homelab running on a bare-metal machine. Built to host my own home setup and practice the same tools used in real infrastructure teams — GitOps, immutable OS, long-term observability, and infrastructure-as-code from the ground up.
 
+**This repo also doubles as a portfolio** — a real, running platform demonstrating these patterns end to end, not a toy example.
+
 > The full repository containing the complete cluster setup, configurations, and runbooks is private for security reasons (credentials, internal network topology, node details). This repo serves as an overview of the architecture and design decisions.
 
 ---
