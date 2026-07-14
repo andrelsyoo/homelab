@@ -146,7 +146,7 @@ Collection:    Alloy (DaemonSet) ──────────────┐
 **Metrics retention:**
 - Prometheus keeps 2 days of hot data locally
 - Thanos sidecar uploads 2-hour TSDB blocks to MinIO every 2 hours
-- Thanos Compactor enforces a 7-day raw retention, 30-day 5m downsampled, 90-day 1h downsampled
+- Thanos Compactor enforces a 3-day raw retention, 15-day 5m downsampled (a 1h-downsampled tier was considered but dropped — see below)
 - Grafana points to Thanos QueryFrontend — queries transparently span both hot and historical data
 
 **Alerting:**
@@ -194,6 +194,8 @@ Envoy Gateway implements the [Kubernetes Gateway API](https://gateway-api.sigs.k
 
 **Workload placement on memory-constrained nodes.** With 3 GB RAM per worker, a single out-of-place heavy pod tips the balance. Everything stateless is pinned to one worker via `nodeSelector`, and everything PVC-bound lands on the other by necessity. ArgoCD's application-controller (349 Mi actual) was the swing factor — moving it to the data worker brought both nodes to ~55% utilisation.
 
+**A correctly configured retention policy was silently doing nothing for 42 days.** The disk-pressure deadlock above recurred even after doubling disk size, and this time the actual root cause was different: the Thanos Compactor — the component responsible for enforcing retention — had been stuck in an OOM crash loop for 42 days on an undersized 128Mi memory limit. `kubectl get pods` still showed *a* compactor pod, just permanently restarting, so nothing about it looked obviously broken at a glance. With retention never actually applied, raw blocks piled up unbounded, keeping the node chronically near its disk-pressure threshold — which flipped state 90 times in just the 2 days before it was caught. Each flip evicted both MinIO and Prometheus; each Prometheus eviction forced an early WAL cut, fragmenting extra blocks back into the very bucket that was already too full. Bumping the compactor's memory limit (128Mi → 512Mi) broke the loop at its root — the fix wasn't more disk, it was noticing that "retention is configured" and "retention is enforced" aren't the same claim, and that they can silently diverge for over a month without a single alert firing.
+
 ---
 
 ## Remote access
@@ -210,3 +212,4 @@ Tailscale was chosen over self-hosted VPN solutions for its simplicity — no se
 
 - SOPS for secrets management (credentials are currently plaintext in values)
 - More RAM on the host to allow worker memory expansion
+- Alert specifically on Compactor/critical-pod restart counts, not just presence — a crash-looping pod hid in plain sight for 42 days
